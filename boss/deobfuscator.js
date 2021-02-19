@@ -46,8 +46,6 @@ function mergeFunction(ast, letname) {
         enter: function (node) {
         },
         leave: function (node, parent) {
-            // console.log(escodegen.generate(node));
-
             // 全局对象中存的是字符串
             if (node.type === esprima.Syntax.MemberExpression
                 && letname.hasOwnProperty(node.object.name)
@@ -95,21 +93,15 @@ function mergeFunction(ast, letname) {
                         for (let i = 0; i < property.value.params.length; i++) {
                             parameter.push(property.value.params[i].name)
                         }
-                        // console.log("实参" + JSON.stringify(arguments));
-                        // console.log("形参" + parameter);
-
 
                         let blockStatement = property.value.body;
-
                         let returnStatement = blockStatement.body[0];
 
                         // 函数返回结果
                         let result = JSON.parse(JSON.stringify(returnStatement.argument));
-                        // console.log("函数返回结果 " + escodegen.generate(result));
 
                         // 结果替换 ==> 更换所有Identifier为实参Identifier
                         if (result.type === esprima.Syntax.CallExpression) {
-
                             result.callee = arguments[parameter.indexOf(result.callee.name)];
                             if (result.arguments.length === 0) {
                                 result.arguments = []
@@ -122,10 +114,6 @@ function mergeFunction(ast, letname) {
                             result.left = arguments[parameter.indexOf(result.left.name)];
                             result.right = arguments[parameter.indexOf(result.right.name)];
                         }
-
-                        // console.log("源代码 " + escodegen.generate(node));
-                        // console.log("反混淆之后的代码 " + escodegen.generate(result));
-                        // console.log('_________\n');
                         return result
                     }
                 }
@@ -138,15 +126,15 @@ function mergeFunction(ast, letname) {
 function functionDeobfuscator(ast) {
     let letname = {};
     let scopeDepth = 0; // initial: global
-    let deleteVariableStatementFlag = false;
 
     ast = estraverse.replace(ast, {
-        // pass 3.1 找到函数全局对象
         enter: function (node) {
             if (shouldSwitchScope(node)) {
                 scopeDepth++;
             }
             letname = {};
+
+            // pass 1 找到函数map
             if (node.type === esprima.Syntax.FunctionDeclaration
                 || node.type === esprima.Syntax.FunctionExpression
             ) {
@@ -158,10 +146,10 @@ function functionDeobfuscator(ast) {
                 if (VariableDeclaration.type !== esprima.Syntax.VariableDeclaration) {
                     return
                 }
-                // console.log(VariableDeclaration);
                 let declarations = VariableDeclaration.declarations;
                 let VariableDeclarator = declarations[0];
-                // console.log(escodegen.generate(VariableDeclaration));
+
+                // 1.1 存储函数map
                 if (VariableDeclarator.init
                     && VariableDeclarator.init.type === esprima.Syntax.ObjectExpression) {
                     letname[VariableDeclarator.id.name] = {};
@@ -171,15 +159,14 @@ function functionDeobfuscator(ast) {
                         const name = property.key.value;
                         letname[VariableDeclarator.id.name][name] = JSON.parse(JSON.stringify(property))
                     }
-                    //删除变量声明
+                    //1.2 删除变量声明
                     blockStatement.body.splice(0, 1);
                     this.skip()
                 }
             }
-
         }
         ,
-        // pass 3.2 全局对象赋值。重新导入代码。
+        // pass 2 全局对象赋值。重新导入代码。
         leave: function (node) {
             if (shouldSwitchScope(node)) {
                 scopeDepth--;
@@ -198,9 +185,7 @@ let isWhileCase = function (ast) {
         return false
     }
     const blockStatement = whileStatement.body;
-
     const switchStatement = blockStatement.body[0];
-    // console.log(escodegen.generate(ast));
 
     return !(switchStatement && switchStatement.type !== esprima.Syntax.SwitchStatement);
 
@@ -208,28 +193,17 @@ let isWhileCase = function (ast) {
 
 function mergeCases(ast, sequence) {
     const blockStatement = ast.body;
-
     const switchStatement = blockStatement.body[0];
-
     let cases = switchStatement.cases;
 
-
     let memberAccessSequence = [];
-
-    // for (let i=0; i< cases.length; i++){
-    //
-    //
-    // }
     // case顺序排序
     for (let i = 0; i < sequence.length; i++) {
-
         memberAccessSequence.push(cases[sequence[i]])
     }
-    // console.log(memberAccessSequence);
-
-    let body = [];
 
     // 合并case
+    let body = [];
     for (let i = 0; i < memberAccessSequence.length; i++) {
         let switchCases = memberAccessSequence[i];
         for (let j = 0; j < switchCases.consequent.length; j++) {
@@ -249,23 +223,15 @@ function switchCaseDeobfuscator(ast) {
     estraverse.traverse(ast, {
         enter: function (node, parent) {
             if (isWhileCase(node)) {
-                // console.log("发现whileCase混淆");
-                // console.log(escodegen.generate(parent));
                 let body = parent.body[0];
                 // whileCase执行顺序
                 let sequence = body.declarations[0].init.callee.object.value;
                 if (!sequence) {
-                    // console.log(escodegen.generate(parent));
                     return
                 }
-                // console.log(sequence);
                 sequence = sequence.split("|");
                 // 反混淆之后的body
                 body = mergeCases(node, sequence);
-
-                // console.log(body);
-
-                // 替换混淆的body
                 parent.body = body;
                 this.skip()
             }
@@ -275,12 +241,12 @@ function switchCaseDeobfuscator(ast) {
 }
 
 function stringDeobfuscator(ast) {
-    let strings = {};
-    let scopeDepth = 0; // initial: global
-
     // pass 1: extract all strings
+    let strings = {};
     let letiable = ast.body[0].declarations[0];
-    strings[letiable.id.name] = letiable.init.elements.map(function (e) {
+    // 全局字符串列表变量名
+    const stringsName = letiable.id.name;
+    strings[stringsName] = letiable.init.elements.map(function (e) {
         return base64_decode(e.value);
     });
 
@@ -292,6 +258,10 @@ function stringDeobfuscator(ast) {
     }
 
     // pass 2: restore code
+
+    // 字符串混淆函数名
+    const StrdeobfuscatorFunctionName = ast.body[2].declarations[0].id.name;
+
     if (Object.keys(strings).length === 0) {
         return ast
     }
@@ -306,9 +276,7 @@ function stringDeobfuscator(ast) {
                 node.property.type === esprima.Syntax.Literal &&
                 typeof node.property.value === 'number'
             ) {
-                // console.log(escodegen.generate(node));
                 let val = strings[node.object.name][node.property.value];
-                // console.log(node.object.name, val);
                 if (val) {
                     return {
                         type: esprima.Syntax.Literal,
@@ -335,20 +303,12 @@ function stringDeobfuscator(ast) {
                 }
             }
 
-            // 执行字符串替换函数
+            // 字符串反混淆
             if (node.type === esprima.Syntax.CallExpression &&
-                node.callee.name === "_0x5426"
+                node.callee.name === StrdeobfuscatorFunctionName
             ) {
-                // console.log(escodegen.generate(node));
                 let idx = Number(node.arguments[0].value);
-
-                let val = strings["_0x3976"][idx];
-                // console.log(val);
-                // console.log(escodegen.generate({
-                //     type: esprima.Syntax.Literal,
-                //     value: val,
-                //     raw: val
-                // }));
+                let val = strings[stringsName][idx];
                 return {
                     type: esprima.Syntax.Literal,
                     value: val,
@@ -451,19 +411,14 @@ function while1ToFor(whileStatement, parent) {
                 // 不是labelStatement 跳转
                 && !blockStatementBody[i].consequent.body[0].label
             ) {
-                // console.log("ifbreak");
-                // console.log(escodegen.generate(blockStatementBody[i]));
                 test = blockStatementBody[i].test;
                 // 二元表表达式 取反
                 if (test.type === esprima.Syntax.BinaryExpression) {
                     test = generateUnaryExpression(test, "!")
-                    // console.log(escodegen.generate(test))
                 }
                 else {
                     test = test.argument;
                 }
-                // update = blockStatementBody[i - 1].expression;
-                // console.log("update" +escodegen.generate(update))
                 body = JSON.parse(JSON.stringify(blockStatementBody.slice(0, blockStatementBody.length - bodyLine)))
             }
 
@@ -475,7 +430,7 @@ function while1ToFor(whileStatement, parent) {
         break
     }
     if (test) {
-        let replace = {
+        return {
             type: esprima.Syntax.WhileStatement,
             test: test,
             body: {
@@ -484,9 +439,6 @@ function while1ToFor(whileStatement, parent) {
             },
 
         };
-        // console.log("生成新的代码" + escodegen.generate(replace));
-        // console.log("生成新的代码");
-        return replace
     }
 
 }
@@ -511,24 +463,19 @@ function while1Deobfuscator(ast) {
 function Deobfuscator(ast) {
     // pass 1: 字符串全局反混淆
     ast = stringDeobfuscator(ast);
-
     let tmpbody = ast.body.splice(0, 2);
 
-    // pass 3: 函数中提取一个函数内部的全局变量。
+    // pass 3: 函数字典map
     ast = functionDeobfuscator(ast);
-
     ast.body.splice(0, 0, tmpbody[1]);
     ast.body.splice(0, 0, tmpbody[0]);
+
     // pass 4: 控制流整平反混淆
     ast = switchCaseDeobfuscator(ast);
-
     ast = switchCaseDeobfuscator(ast);
 
-    // let fileName = "boss/testwhilecase.js";
-    // writeBeautifulJs(ast, fileName);
-
     // pass 5: while(1) break 反混淆
-    while1Deobfuscator(ast);
+    // while1Deobfuscator(ast);
 
 }
 
